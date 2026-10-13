@@ -12,9 +12,35 @@ import {
   type SampleMode,
 } from "./core/imageToBeads";
 import { fullPalette, starterPalette } from "./core/palette";
+import { recommendCanvasSize } from "./core/recommendCanvasSize";
+import {
+  createBeadPatternFromText,
+  type TextStyle,
+} from "./core/textToBeads";
 import "./styles.css";
 
+type CreationMode = "image" | "text";
 type PaletteMode = "starter" | "full";
+
+type CanvasSize = {
+  width: number;
+  height: number;
+};
+
+const CANVAS_SIZE_LIMIT = {
+  min: 16,
+  max: 160,
+};
+
+const CANVAS_SIZE_PRESETS: CanvasSize[] = [
+  { width: 40, height: 40 },
+  { width: 48, height: 48 },
+  { width: 60, height: 80 },
+  { width: 80, height: 60 },
+  { width: 100, height: 100 },
+];
+
+const DEFAULT_CANVAS_SIZE = CANVAS_SIZE_PRESETS[0];
 
 type AppProps = {
   imageDataLoader?: ImageDataLoader;
@@ -27,9 +53,18 @@ function App({
   imageDataLoader = readImageFileAsImageData,
   patternExporter = createPatternPngBlob,
 }: AppProps) {
+  const [creationMode, setCreationMode] = useState<CreationMode>("image");
   const [fileName, setFileName] = useState("");
   const [imageData, setImageData] = useState<ImageData | null>(null);
-  const [beadWidth, setBeadWidth] = useState(60);
+  const [textInput, setTextInput] = useState("福");
+  const [textStyle, setTextStyle] = useState<TextStyle>("bold");
+  const [canvasSize, setCanvasSize] = useState<CanvasSize>(DEFAULT_CANVAS_SIZE);
+  const [canvasWidthInput, setCanvasWidthInput] = useState(
+    String(DEFAULT_CANVAS_SIZE.width),
+  );
+  const [canvasHeightInput, setCanvasHeightInput] = useState(
+    String(DEFAULT_CANVAS_SIZE.height),
+  );
   const [sampleMode, setSampleMode] = useState<SampleMode>("dominant");
   const [paletteMode, setPaletteMode] = useState<PaletteMode>("full");
   const [showCodes, setShowCodes] = useState(true);
@@ -39,18 +74,43 @@ function App({
   const [error, setError] = useState("");
 
   const palette = paletteMode === "starter" ? starterPalette : fullPalette;
-  const pattern = useMemo(
-    () =>
-      imageData
-        ? createBeadPatternFromImageData(imageData, {
-            beadWidth,
+  const pattern = useMemo(() => {
+    if (creationMode === "text") {
+      return textInput.trim()
+        ? createBeadPatternFromText({
+            beadHeight: canvasSize.height,
+            beadWidth: canvasSize.width,
+            palette,
+            text: textInput,
+            textStyle,
+          })
+        : null;
+    }
+
+    return imageData
+      ? createBeadPatternFromImageData(imageData, {
+            beadHeight: canvasSize.height,
+            beadWidth: canvasSize.width,
             palette,
             sampleMode,
           })
-        : null,
-    [beadWidth, imageData, palette, sampleMode],
-  );
+      : null;
+  }, [
+    canvasSize.height,
+    canvasSize.width,
+    creationMode,
+    imageData,
+    palette,
+    sampleMode,
+    textInput,
+    textStyle,
+  ]);
   const stats = pattern ? getPatternStats(pattern) : [];
+
+  const selectedPreset = CANVAS_SIZE_PRESETS.find(
+    (preset) =>
+      preset.width === canvasSize.width && preset.height === canvasSize.height,
+  );
 
   const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -80,7 +140,56 @@ function App({
   const handleReset = () => {
     setFileName("");
     setImageData(null);
+    setTextInput("福");
     setError("");
+  };
+
+  const applyCanvasSize = (nextSize: CanvasSize) => {
+    const width = clampCanvasDimension(nextSize.width);
+    const height = clampCanvasDimension(nextSize.height);
+
+    setCanvasSize({ width, height });
+    setCanvasWidthInput(String(width));
+    setCanvasHeightInput(String(height));
+  };
+
+  const handleCanvasWidthChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value;
+    setCanvasWidthInput(value);
+
+    const width = Number(value);
+    if (Number.isFinite(width)) {
+      setCanvasSize((current) => ({
+        ...current,
+        width: clampCanvasDimension(width),
+      }));
+    }
+  };
+
+  const handleCanvasHeightChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value;
+    setCanvasHeightInput(value);
+
+    const height = Number(value);
+    if (Number.isFinite(height)) {
+      setCanvasSize((current) => ({
+        ...current,
+        height: clampCanvasDimension(height),
+      }));
+    }
+  };
+
+  const handleRecommendCanvasSize = () => {
+    if (creationMode === "text") {
+      applyCanvasSize(recommendTextCanvasSize(textInput));
+      return;
+    }
+
+    if (!imageData) {
+      return;
+    }
+
+    applyCanvasSize(recommendCanvasSize(imageData));
   };
 
   const handleDownloadPattern = async () => {
@@ -93,7 +202,14 @@ function App({
 
     try {
       const blob = await patternExporter(pattern, stats, { showCodes, showGrid });
-      fileDownloader(blob, getPatternFileName(fileName));
+      fileDownloader(
+        blob,
+        getPatternFileName({
+          fileName,
+          mode: creationMode,
+          text: textInput,
+        }),
+      );
     } catch (currentError) {
       setError(
         currentError instanceof Error
@@ -140,63 +256,168 @@ function App({
       <section className="workspace" aria-label="拼豆生成工作台">
         <aside className="settings-panel">
           <h2>生成设置</h2>
-          <label className="upload-dropzone">
-            <input
-              aria-describedby="upload-status"
-              aria-label="上传图片"
-              accept="image/*"
-              onChange={handleUpload}
-              type="file"
-            />
-            <span>{fileName || "点击上传图片"}</span>
-            <small id="upload-status">
-              {isLoading ? "正在读取图片" : "支持 JPG、PNG、WebP"}
-            </small>
-          </label>
+          <fieldset>
+            <legend>生成模式</legend>
+            <div className="segmented-control mode-switch">
+              <label>
+                <input
+                  checked={creationMode === "image"}
+                  name="creation-mode"
+                  onChange={() => setCreationMode("image")}
+                  type="radio"
+                />
+                <span>图片转拼豆</span>
+              </label>
+              <label>
+                <input
+                  checked={creationMode === "text"}
+                  name="creation-mode"
+                  onChange={() => setCreationMode("text")}
+                  type="radio"
+                />
+                <span>文字转拼豆</span>
+              </label>
+            </div>
+          </fieldset>
+          {creationMode === "image" ? (
+            <label className="upload-dropzone">
+              <input
+                aria-describedby="upload-status"
+                aria-label="上传图片"
+                accept="image/*"
+                onChange={handleUpload}
+                type="file"
+              />
+              <span>{fileName || "点击上传图片"}</span>
+              <small id="upload-status">
+                {isLoading ? "正在读取图片" : "支持 JPG、PNG、WebP"}
+              </small>
+            </label>
+          ) : (
+            <div className="text-settings">
+              <h3>文字设置</h3>
+              <label className="text-input-field">
+                <span>输入文字</span>
+                <textarea
+                  aria-label="输入文字"
+                  maxLength={8}
+                  onChange={(event) => setTextInput(event.target.value)}
+                  placeholder="输入 1-8 个字"
+                  rows={3}
+                  value={textInput}
+                />
+              </label>
+              <fieldset>
+                <legend>字体风格</legend>
+                <div className="segmented-control text-style-control">
+                  {TEXT_STYLE_OPTIONS.map((option) => (
+                    <label key={option.value}>
+                      <input
+                        checked={textStyle === option.value}
+                        name="text-style"
+                        onChange={() => setTextStyle(option.value)}
+                        type="radio"
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            </div>
+          )}
           {error ? (
             <p className="error-message" role="alert">
               {error}
             </p>
           ) : null}
 
-          <div className="control-group">
+          <div className="control-group canvas-size-control">
             <div className="control-label">
-              <span>拼豆宽度</span>
-              <strong>{beadWidth} 格</strong>
+              <span>画布尺寸</span>
+              <strong>
+                {canvasSize.width} x {canvasSize.height}
+              </strong>
             </div>
-            <input
-              aria-label="拼豆宽度"
-              onChange={(event) => setBeadWidth(Number(event.target.value))}
-              value={beadWidth}
-              max={120}
-              min={16}
-              type="range"
-            />
+            <div className="size-preset-grid" aria-label="画布尺寸预设">
+              {CANVAS_SIZE_PRESETS.map((preset) => (
+                <button
+                  aria-pressed={selectedPreset === preset}
+                  className={`size-preset${
+                    selectedPreset === preset ? " size-preset--active" : ""
+                  }`}
+                  key={`${preset.width}x${preset.height}`}
+                  onClick={() => applyCanvasSize(preset)}
+                  type="button"
+                >
+                  {preset.width}x{preset.height}
+                </button>
+              ))}
+            </div>
+            <div className="custom-size-row">
+              <label>
+                <span>宽</span>
+                <input
+                  aria-label="画布宽度"
+                  inputMode="numeric"
+                  max={CANVAS_SIZE_LIMIT.max}
+                  min={CANVAS_SIZE_LIMIT.min}
+                  onBlur={() =>
+                    applyCanvasSize({
+                      ...canvasSize,
+                      width: Number(canvasWidthInput) || canvasSize.width,
+                    })
+                  }
+                  onChange={handleCanvasWidthChange}
+                  type="number"
+                  value={canvasWidthInput}
+                />
+              </label>
+              <label>
+                <span>高</span>
+                <input
+                  aria-label="画布高度"
+                  inputMode="numeric"
+                  max={CANVAS_SIZE_LIMIT.max}
+                  min={CANVAS_SIZE_LIMIT.min}
+                  onBlur={() =>
+                    applyCanvasSize({
+                      ...canvasSize,
+                      height: Number(canvasHeightInput) || canvasSize.height,
+                    })
+                  }
+                  onChange={handleCanvasHeightChange}
+                  type="number"
+                  value={canvasHeightInput}
+                />
+              </label>
+            </div>
           </div>
 
-          <fieldset>
-            <legend>取色方式</legend>
-            <div className="segmented-control">
-              <label>
-                <input
-                  checked={sampleMode === "dominant"}
-                  name="sample-mode"
-                  onChange={() => setSampleMode("dominant")}
-                  type="radio"
-                />
-                <span>主导色</span>
-              </label>
-              <label>
-                <input
-                  checked={sampleMode === "average"}
-                  name="sample-mode"
-                  onChange={() => setSampleMode("average")}
-                  type="radio"
-                />
-                <span>平均色</span>
-              </label>
-            </div>
-          </fieldset>
+          {creationMode === "image" ? (
+            <fieldset>
+              <legend>取色方式</legend>
+              <div className="segmented-control">
+                <label>
+                  <input
+                    checked={sampleMode === "dominant"}
+                    name="sample-mode"
+                    onChange={() => setSampleMode("dominant")}
+                    type="radio"
+                  />
+                  <span>主导色</span>
+                </label>
+                <label>
+                  <input
+                    checked={sampleMode === "average"}
+                    name="sample-mode"
+                    onChange={() => setSampleMode("average")}
+                    type="radio"
+                  />
+                  <span>平均色</span>
+                </label>
+              </div>
+            </fieldset>
+          ) : null}
 
           <fieldset>
             <legend>色彩数量</legend>
@@ -247,11 +468,29 @@ function App({
           <div className="panel-heading">
             <div>
               <h2>拼豆预览</h2>
-              <p>上传图片后自动生成预览。</p>
+              <p>
+                {creationMode === "text"
+                  ? "输入文字后按当前画布尺寸生成。"
+                  : "上传图片后自动生成预览。"}
+              </p>
             </div>
-            <span className="preview-meta">
-              {pattern ? `${pattern.width} x ${pattern.height} 格` : "等待图片"}
-            </span>
+            <div className="preview-actions">
+              <button
+                className="recommend-button"
+                disabled={creationMode === "image" ? !imageData : !textInput.trim()}
+                onClick={handleRecommendCanvasSize}
+                type="button"
+              >
+                {creationMode === "text" ? "适配文字" : "智能推荐"}
+              </button>
+              <span className="preview-meta">
+                {pattern
+                  ? `${pattern.width} x ${pattern.height} 格`
+                  : creationMode === "text"
+                    ? "等待文字"
+                    : "等待图片"}
+              </span>
+            </div>
           </div>
           <div className="preview-canvas" aria-label="拼豆预览画布">
             {pattern ? (
@@ -268,7 +507,11 @@ function App({
                   ))}
                 </span>
                 <strong>还没有图纸</strong>
-                <p>先上传一张图片，系统会按当前参数生成拼豆网格。</p>
+                <p>
+                  {creationMode === "text"
+                    ? "输入文字后，系统会按当前画布尺寸生成拼豆网格。"
+                    : "先上传一张图片，系统会按当前参数生成拼豆网格。"}
+                </p>
               </div>
             )}
           </div>
@@ -309,9 +552,46 @@ function App({
   );
 }
 
-function getPatternFileName(fileName: string) {
-  const baseName = fileName.replace(/\.[^.]+$/, "").trim() || "pindou";
+const TEXT_STYLE_OPTIONS: Array<{ label: string; value: TextStyle }> = [
+  { label: "黑体", value: "bold" },
+  { label: "圆体", value: "rounded" },
+  { label: "像素", value: "pixel" },
+];
+
+function getPatternFileName({
+  fileName,
+  mode,
+  text,
+}: {
+  fileName: string;
+  mode: CreationMode;
+  text: string;
+}) {
+  const baseName =
+    mode === "text"
+      ? text.trim().slice(0, 8) || "文字"
+      : fileName.replace(/\.[^.]+$/, "").trim() || "pindou";
   return `${baseName}-拼豆图纸.png`;
+}
+
+function clampCanvasDimension(value: number) {
+  return Math.min(
+    CANVAS_SIZE_LIMIT.max,
+    Math.max(CANVAS_SIZE_LIMIT.min, Math.round(value)),
+  );
+}
+
+function recommendTextCanvasSize(text: string): CanvasSize {
+  const length = Math.max(1, text.trim().length);
+
+  if (length <= 1) {
+    return { width: 48, height: 48 };
+  }
+  if (length <= 4) {
+    return { width: 80, height: 60 };
+  }
+
+  return { width: 100, height: 100 };
 }
 
 function BeadGrid({

@@ -91,7 +91,7 @@ npm run build
 ## Current UX Decisions
 
 - Uploading an image automatically generates the bead pattern.
-- Bead width defaults to 60 cells.
+- Canvas size defaults to 40 x 40 cells.
 - Dominant color is the default sampling mode.
 - Full palette is the default palette mode.
 - Color codes and grid lines are shown by default.
