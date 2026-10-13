@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://perlerbead.i9527.xin/sitemap.xml
